@@ -15,7 +15,7 @@ Requirements:
 - `python==3.10`
 
 ```bash
-git clone https://github.com/sahilsethi0105/protoecgnet.git
+git clone https://github.com/bbj-lab/protoecgnet.git
 cd protoecgnet
 conda env create -f environment.yml
 conda activate ecg_env
@@ -25,7 +25,7 @@ conda activate ecg_env
 Please install PTB-XL directly from PhysioNet [`here`](https://physionet.org/content/ptb-xl/1.0.3/). 
 
 ## Using the Repo with PTB-XL
-- In [`ecg_utils.py`](https://github.com/sahilsethi0105/bbj_ecg/blob/main/src/ecg_utils.py), update ```DATASET_PATH``` to where you installed the dataset, update the ```STANDARDIZATION_PATH``` directory (where you want to save preprocessing results), and update ```SCP_GROUP_PATH``` to where you save [`scp_statementsRegrouped2.csv`](https://github.com/sahilsethi0105/protoecgnet/blob/main/scp_statementsRegrouped2.csv)
+- In [`ecg_utils.py`](https://github.com/bbj-lab/bbj_ecg/blob/main/src/ecg_utils.py), update ```DATASET_PATH``` to where you installed the dataset, update the ```STANDARDIZATION_PATH``` directory (where you want to save preprocessing results), and update ```SCP_GROUP_PATH``` to where you save [`scp_statementsRegrouped2.csv`](https://github.com/bbj-lab/protoecgnet/blob/main/scp_statementsRegrouped2.csv)
 
 ## Training
  - Below is an example python command for training a model
@@ -34,9 +34,9 @@ Please install PTB-XL directly from PhysioNet [`here`](https://physionet.org/con
    - 1=1D rhythm
    - 3=2D local morphology
    - 4=2D global
-   - [`scp_statementsRegrouped2.csv`](https://github.com/sahilsethi0105/protoecgnet/blob/main/scp_statementsRegrouped2.csv) contains the groupings
- - Note that you need to pre-compute the label co-occurence matrices, then update their file paths for each label set in [`proto_models1D.py`](https://github.com/sahilsethi0105/protoecgnet/blob/main/src/proto_models1D.py) and [`proto_models2D.py`](https://github.com/sahilsethi0105/protoecgnet/blob/main/src/proto_models2D.py):
-   - In [`label_co.py`](https://github.com/sahilsethi0105/protoecgnet/blob/main/src/label_co.py), update ```label_set``` in the ```get_dataloaders()``` call based on the same value you are planning to use when training your model
+   - [`scp_statementsRegrouped2.csv`](https://github.com/bbj-lab/protoecgnet/blob/main/scp_statementsRegrouped2.csv) contains the groupings
+ - Note that you need to pre-compute the label co-occurence matrices, then update their file paths for each label set in [`proto_models1D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models1D.py) and [`proto_models2D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models2D.py):
+   - In [`label_co.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/label_co.py), update ```label_set``` in the ```get_dataloaders()``` call based on the same value you are planning to use when training your model
    - Also update the ```save_path``` to be appropriate for that label set
    - Then, simply run ```python label_co.py``` in the terminal
  - Update "training_stage" as desired: 
@@ -44,11 +44,11 @@ Please install PTB-XL directly from PhysioNet [`here`](https://physionet.org/con
     - "prototypes" freezes the feature extractor and classifier, and only trained the prototype (and add-on) layers, so you need to use the "pretrained_weights" argument to provide weights to a pre-trained feature extractor
     - "joint" trains everything except the classifier
     - "classifier" trains a branch-specific classifier
-    - "fusion" trains a fusion classifier, but you need to go in and manually update the arguments in [`src/main.py`](https://github.com/sahilsethi0105/protoecgnet/blob/main/src/main.py) (paths to model weights for each branch, number of prototypes per branch, backbone type per branch, etc.)
+    - "fusion" trains a fusion classifier, but you need to go in and manually update the arguments in [`src/main.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/main.py) (paths to model weights for each branch, number of prototypes per branch, backbone type per branch, etc.)
     - "projection" does not train the model—it instead performs prototype projection
  - Inference is automatically done after training (excluding when training_stage = "projection"), and results are logged to TensorBoard and an output CSV
  - All training progress is logged to TensorBoard
- - Descriptions of each input argument can be found in [`src/main.py`](https://github.com/sahilsethi0105/protoecgnet/blob/main/src/main.py)
+ - Descriptions of each input argument can be found in [`src/main.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/main.py)
 
 ```bash
 python3 main.py \
@@ -83,8 +83,8 @@ python3 main.py \
 
 ## Tuning
  - Below is an example python command for running a hyperparameter tuning sweep.
- - Adjust the search space directly in [`src/tune.py`](https://github.com/sahilsethi0105/protoecgnet/blob/main/src/tune.py) as desired (most of the arguments below won't be changed)
- - Descriptions of each input argument can be found in [`src/tune.py`](https://github.com/sahilsethi0105/protoecgnet/blob/main/src/tune.py)
+ - Adjust the search space directly in [`src/tune.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/tune.py) as desired (most of the arguments below won't be changed)
+ - Descriptions of each input argument can be found in [`src/tune.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/tune.py)
 
 ```bash
 python tune.py \
@@ -111,7 +111,7 @@ python tune.py \
 
 ## Additional Notes
  - The commands in  are for directly running the files
- - [`scripts/`](https://github.com/sahilsethi0105/protoecgnet/tree/main/scripts) contains the shell scripts used to submit jobs to SLURM if using an HPC
+ - [`scripts/`](https://github.com/bbj-lab/protoecgnet/tree/main/scripts) contains the shell scripts used to submit jobs to SLURM if using an HPC
 
  - To view TensorBoard logs, after activating your conda environment (with TensorBoard installed), do:
    ```tensorboard --logdir=/path/to/logdir/job_name --port 6006```
