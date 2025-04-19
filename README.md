@@ -35,7 +35,7 @@ Please install PTB-XL directly from PhysioNet [`here`](https://physionet.org/con
    - 3=2D local morphology
    - 4=2D global
    - [`scp_statementsRegrouped2.csv`](https://github.com/bbj-lab/protoecgnet/blob/main/scp_statementsRegrouped2.csv) contains the groupings
- - Note that you need to pre-compute the label co-occurence matrices, then update their file paths for each label set in [`proto_models1D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models1D.py) and [`proto_models2D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models2D.py):
+ - Note that you need to pre-compute the label co-occurrence matrices, then update their file paths for each label set in [`proto_models1D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models1D.py) and [`proto_models2D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models2D.py):
    - In [`label_co.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/label_co.py), update ```label_set``` in the ```get_dataloaders()``` call based on the same value you are planning to use when training your model
    - Also update the ```save_path``` to be appropriate for that label set
    - Then, simply run ```python label_co.py``` in the terminal
