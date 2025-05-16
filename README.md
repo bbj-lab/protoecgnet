@@ -17,7 +17,7 @@ Requirements:
 ```bash
 git clone https://github.com/bbj-lab/protoecgnet.git
 cd protoecgnet
-conda env create -f environment.yml
+conda env create -f environment.yml --name ecg_env
 conda activate ecg_env
 ```
 
