@@ -123,6 +123,8 @@ python tune.py \
 
 ## Developers
    - Model/Training/Tuning Repo: [Sahil Sethi](https://github.com/sahilsethi0105)
+     - This is an original codebase but contains several elements heavily inspired by [ProtoPMed-EEG](https://github.com/chengstark/ProtoPMed-EEG), [TesNet](https://github.com/JackeyWang96/TesNet), & [ProtoPNet](https://github.com/cfchen-duke/ProtoPNet)
+     - Credit for the underlying prototype-learning approach goes to the above papers (acknowledged in our manuscript's Related Works)
    - User Interface (see below): [David Chen](https://github.com/sudoris)
 
 ![Alt text](evaluation_interface.jpg)
