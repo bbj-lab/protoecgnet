@@ -110,6 +110,9 @@ python tune.py \
 
 
 ## Additional Notes
+ - We recommend 5-10 prototypes per branch for category 1 (1D global prototypes), 15-20 for category 3 (2D partial prototypes), and 3-5 for category 4 (2D global prototypes)
+    - You can easily hyperparameter tune this in `tune.py`
+    - Similarly, you may be able to further optimize the loss coefficients, but we set default values that work well in `main.py` and `tune.py`
  - The commands above are for directly running the files
  - [`scripts/`](https://github.com/bbj-lab/protoecgnet/tree/main/scripts) contains the shell scripts used to submit jobs to SLURM if using an HPC
 
