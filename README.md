@@ -123,6 +123,8 @@ python tune.py \
     - Then, either access ```http://localhost:6006``` in your browser
     - Or if on an HPC, ssh into the computer with a new terminal tab ```ssh -L 6006:localhost:6006 myaccount@example_computer.edu```, then access ```http://localhost:6006``` in your browser
     - You can use a different port (6006 is chosen as an example)
+ - You can directly visualize all the prototypes using the TensorBoard logs, or save the images directly by setting ```save_val``` to True and specifying a ```save_dir``` in ```log_ecg_to_tensorboard_1d``` and ```log_ecg_to_tensorboard_2d``` in ```push.py```
+ - If you are interested in visualizing test ECGs and prototype activations, you can use the ```plot_ecg()``` function in ```ecg_utils.py``` and adapt the highlighting logic from ```log_ecg_to_tensorboard_2d``` in ```push.py``` to inference as needed
 
 ## Developers
    - Model/Training/Tuning Repo: [Sahil Sethi](https://github.com/sahilsethi0105)
