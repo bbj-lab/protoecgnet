@@ -31,9 +31,9 @@ Please install PTB-XL directly from PhysioNet [`here`](https://physionet.org/con
  - Below is an example python command for training a model
  - You can choose to train on any of the dataset groupings from the original PTB-XL paper (i.e., "superdiagnostic", "subdiagnostic", "diagnostic", "form", "rhythm", "all") by simply passing that string into ```args.label_set```, but ensure ```args.custom_groups``` is set to False
  - If you want to train with the custom groupings from our paper, set ```args.custom_groups``` to True and pass in either 1, 3, or 4 for ```args.label_set``` depending on which label grouping you want to use
-   - 1=1D rhythm
-   - 3=2D local morphology
-   - 4=2D global
+   - 1=1D rhythm (use ```args.proto_time_len```=32)
+   - 3=2D local morphology (use ```args.proto_time_len```=3)
+   - 4=2D global (use ```args.proto_time_len```=32)
    - [`scp_statementsRegrouped2.csv`](https://github.com/bbj-lab/protoecgnet/blob/main/scp_statementsRegrouped2.csv) contains the groupings
  - Note that you need to pre-compute the label co-occurrence matrices, then update their file paths for each label set in [`proto_models1D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models1D.py) and [`proto_models2D.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/proto_models2D.py):
    - In [`label_co.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/label_co.py), update ```label_set``` in the ```get_dataloaders()``` call based on the same value you are planning to use when training your model
