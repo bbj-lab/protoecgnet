@@ -48,13 +48,14 @@ Please install PTB-XL directly from PhysioNet [`here`](https://physionet.org/con
     - "projection" does not train the model—it instead performs prototype projection
   - Training notes:
     - Make sure to always do "projection" before training a classifier (whether doing the branch-specific "classifier" stage or the multi-branch "fusion" stage) to ensure prototypes are grounded in real training ECGs
-    - There are several ways to train models, including pre-training the ResNet backbone with the "feature_extractor" phase then passing those weights into the ```pretrained_weights``` argument when doing the "joint" phase
+    - There are several ways to train models, including pre-training the ResNet backbone with the "feature_extractor" phase then passing those weights into the ```args.pretrained_weights``` argument when doing the "joint" phase
     - You can also do multiple rounds of "joint" followed by "projection" each time before doing "classifier" or "fusion" if needed to improve performance
     - You can also try freezing the ResNet backbone and only training the prototypes with the "prototypes" stage
     - It is also encouraged to experiment with additional backbones (we focused on only ResNets to minimize variables and isolate the effect of our multi-branch architecture and contrastive loss)
     - If using additional backbones, for at least the 2D partial prototype morphology branch, ensure the latent feature map preserves the spatial relationship of the input (for the partial prototypes to correctly correspond to localized time segments)
     - You can see how we adapted ResNet 1D and 2D to work with our architecture in [`src/backbones.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/backbones.py)
  - Inference is automatically done after training (excluding when training_stage = "projection"; after projection, train a branch-specific or fusion classifier before doing inference), and results are logged to TensorBoard and an output CSV
+   - You can also bypass training and just do inference if you set ```args.test_model```=True and specify the model weights using ```args.pretrained_weights```
  - All training progress is logged to TensorBoard
  - Descriptions of each input argument can be found in [`src/main.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/main.py)
 
