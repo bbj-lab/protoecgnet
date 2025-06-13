@@ -15,6 +15,9 @@ from scipy.signal import butter, filtfilt
 DATASET_PATH = "/gpfs/data/bbj-lab/users/sethis/physionet.org/files/ptb-xl/1.0.3"
 STANDARDIZATION_PATH = '/gpfs/data/bbj-lab/users/sethis/experiments/preprocessing'
 SCP_GROUP_PATH = "scp_statementsRegrouped2.csv"
+# SCP_GROUP_PATH can only be used when scp_statementsRegrouped2.csv is in the same directory
+# as DATASET_PATH. SCP_GROUP_PATH_ABS allows us to provide a separate path for scp_statementsRegrouped2.csv
+SCP_GROUP_PATH_ABS = "/home/chend5/protoecgnet/scp_statementsRegrouped2.csv"
 
 def remove_baseline_wander(X, sampling_rate=100, cutoff=0.5, order=1):
     """
@@ -177,8 +180,11 @@ def apply_standardizer(X, ss, mode):
 
 def load_label_mappings(custom_groups=False, prototype_category=None):
     if custom_groups:
-        label_df = pd.read_csv(os.path.join(DATASET_PATH, SCP_GROUP_PATH), index_col=0) 
-
+        if SCP_GROUP_PATH_ABS is not None:
+            label_df = pd.read_csv(SCP_GROUP_PATH_ABS, index_col=0)
+        else:
+            label_df = pd.read_csv(os.path.join(DATASET_PATH, SCP_GROUP_PATH), index_col=0)
+        
         # Ensure the new column exists
         assert "prototype_category" in label_df.columns, "Missing 'prototype_category' column in regrouped SCP file."
 
