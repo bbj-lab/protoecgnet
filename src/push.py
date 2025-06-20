@@ -434,7 +434,7 @@ def push_prototypes2d(model, dataloader, save_dir, label_set, job_name, logger=N
 
     label_mappings = load_label_mappings(custom_groups=custom_groups,
                                 prototype_category=None if not custom_groups else int(label_set))
-    label_set_names = label_mappings["custom"] if custom_groups else label_mappings[int(label_set)]
+    label_set_names = label_mappings["custom"] if custom_groups else label_mappings[label_set]
 
     label_mapping = {i: label_set_names[i] for i in range(len(label_set_names))}
 
