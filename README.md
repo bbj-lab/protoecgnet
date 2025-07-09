@@ -119,7 +119,7 @@ python tune.py \
 
 
 ## Additional Notes
- - We recommend 5-10 prototypes per branch for category 1 (1D global prototypes), 15-20 for category 3 (2D partial prototypes), and 3-5 for category 4 (2D global prototypes)
+ - We recommend 5-10 prototypes per branch for category 1 (1D global prototypes), 15-20 for category 3 (2D partial prototypes), and 3-8 for category 4 (2D global prototypes)
     - You can easily hyperparameter tune this in `tune.py`
     - Similarly, you may be able to further optimize the loss coefficients, but we set default values that work well in `main.py` and `tune.py`
  - The commands above are for directly running the files
