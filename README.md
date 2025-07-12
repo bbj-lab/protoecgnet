@@ -117,6 +117,12 @@ python tune.py \
     --backbone resnet18
 ```
 
+## Inference and Case-Based Explanations
+ - Use [`src/inference_fusion.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/inference_fusion.py) to run inference on the full test set using the fusion classifier
+   - Make sure to update all the paths/values in the top of the file
+   - It will determine what classes are predicted for each test ECG, and also determine what the top activated prototypes are for each predicted diagnosis using all three branches
+   - Example command: ```python inference_fusion.py --show-prototypes --sanity-check```
+ - Use [`src/case_explanations.ipynb`](https://github.com/bbj-lab/protoecgnet/blob/main/src/case_explanations.ipynb) for case-based explanations
 
 ## Additional Notes
  - We recommend 5-10 prototypes per branch for category 1 (1D global prototypes), 15-20 for category 3 (2D partial prototypes), and 3-8 for category 4 (2D global prototypes)
