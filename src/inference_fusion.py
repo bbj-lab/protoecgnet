@@ -5,8 +5,8 @@ This script provides standalone inference capabilities for trained ProtoECGNet f
 that combine 1D rhythm, 2D partial morphology, and 2D global branches.
 
 Usage:
-    python inference_fusion.py --show-prototypes --sanity-check
-    python inference_fusion.py --check-labels --show-metadata
+    python inference_fusion.py --show-prototypes --sanity-check --save-results
+    python inference_fusion.py --check-labels --show-metadata --save-results
 """
 
 import torch
