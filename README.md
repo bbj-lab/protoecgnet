@@ -121,7 +121,7 @@ python tune.py \
  - Use [`src/inference_fusion.py`](https://github.com/bbj-lab/protoecgnet/blob/main/src/inference_fusion.py) to run inference on the full test set using the fusion classifier
    - Make sure to update all the paths/values in the top of the file
    - It will determine what classes are predicted for each test ECG, and also determine what the top activated prototypes are for each predicted diagnosis using all three branches
-   - Example command: ```python inference_fusion.py --show-prototypes --sanity-check```
+   - Example command: ```python inference_fusion.py --show-prototypes --sanity-check --save-results```
  - Use [`src/case_explanations.ipynb`](https://github.com/bbj-lab/protoecgnet/blob/main/src/case_explanations.ipynb) for case-based explanations
 
 ## Additional Notes
