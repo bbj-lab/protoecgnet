@@ -35,7 +35,8 @@ class FusionProtoClassifier(nn.Module):
         sims = torch.cat([sim1d, sim2d_partial, sim2d_global], dim=1)
         logits = self.classifier(sims)
         return logits
-
+        
+# THE CODE BELOW IS NOT USED; instead, we call the normal dataloading code and use label_set='all' with custom_groups=False
 def load_fusion_label_mappings():
     label_df = pd.read_csv(os.path.join(DATASET_PATH, "scp_statementsRegrouped2.csv"), index_col=0)
     assert "prototype_category" in label_df.columns
