@@ -72,11 +72,10 @@ parser.add_argument('--seed', type=int, default=42, help='Random seed for reprod
 parser.add_argument('--standardize', type=str2bool, default=False, help='Whether to standardize input ECG signals')
 parser.add_argument('--remove_baseline', type=str2bool, default=True, help='Whether to remove baseline wander from input ECG signals (high-pass filter)')
 
-#Resnet18 purevanilla weights
-parser.add_argument('--fusion_weights1', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat1_purevanilla_proj2/cat1_purevanilla_proj2_projection.pth', help='Path to pretrained model weights for category 1')
-parser.add_argument('--fusion_weights3', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat3_purevanilla_resnet18_proj1/cat3_purevanilla_resnet18_proj1_projection.pth', help='Path to pretrained model weights for category 3')
-parser.add_argument('--fusion_weights4', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat4_purevanilla_resnet_proj1/cat4_purevanilla_resnet_proj1_projection.pth', help='Path to pretrained model weights for category 4')
-
+parser.add_argument('--fusion_weights1', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat1_new_redo1_proj1/cat1_new_redo1_proj1_projection.pth', help='Path to pretrained model weights for category 1')
+parser.add_argument('--fusion_weights3', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat3_2D_redo1_tunejoint1_trial96_proj/cat3_2D_redo1_tunejoint1_trial96_proj_projection.pth', help='Path to pretrained model weights for category 3')
+parser.add_argument('--fusion_weights4', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat4_2D_redo1_tunejoint1_trial5_proj/cat4_2D_redo1_tunejoint1_trial5_proj_projection.pth', help='Path to pretrained model weights for category 4')
+    
 parser.add_argument('--fusion_backbone1', type=str, default='resnet1d18', help='Backbone for 1D rhythm model (category 1)')
 parser.add_argument('--fusion_backbone3', type=str, default='resnet18', help='Backbone for 2D partial morphology model (category 3)')
 parser.add_argument('--fusion_backbone4', type=str, default='resnet18', help='Backbone for 2D global model (category 4)')
@@ -87,7 +86,7 @@ parser.add_argument('--fusion_proto_dim4', type=int, default=512, help='Prototyp
 
 parser.add_argument('--fusion_single_ppc1', type=int, default=5, help='Single-class prototypes per class for category 1') 
 parser.add_argument('--fusion_single_ppc3', type=int, default=18, help='Single-class prototypes per class for category 3')
-parser.add_argument('--fusion_single_ppc4', type=int, default=3, help='Single-class prototypes per class for category 4')
+parser.add_argument('--fusion_single_ppc4', type=int, default=7, help='Single-class prototypes per class for category 4')
 
 parser.add_argument('--fusion_joint_ppb1', type=int, default=0, help='Joint prototypes per border for category 1')
 parser.add_argument('--fusion_joint_ppb3', type=int, default=0, help='Joint prototypes per border for category 3')
