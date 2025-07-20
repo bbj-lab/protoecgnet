@@ -76,9 +76,9 @@ if __name__ == '__main__':
                     default='ReduceLROnPlateau', help="Type of learning rate scheduler to use")
 
     # Fusion classifier-specific arguments
-    parser.add_argument('--fusion_weights1', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat1_static_constants_tune1_proj/cat1_static_constants_tune1_proj_projection.pth', help='Path to pretrained model weights for category 1')
-    parser.add_argument('--fusion_weights3', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat3_static_constants_tune1_tempproj1/cat3_static_constants_tune1_tempproj1_projection.pth' , help='Path to pretrained model weights for category 3')
-    parser.add_argument('--fusion_weights4', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat4_static_constants_tune1_proj/cat4_static_constants_tune1_proj_projection.pth', help='Path to pretrained model weights for category 4')
+    parser.add_argument('--fusion_weights1', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat1_new_redo1_proj1/cat1_new_redo1_proj1_projection.pth', help='Path to pretrained model weights for category 1')
+    parser.add_argument('--fusion_weights3', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat3_2D_redo1_tunejoint1_trial96_proj/cat3_2D_redo1_tunejoint1_trial96_proj_projection.pth', help='Path to pretrained model weights for category 3')
+    parser.add_argument('--fusion_weights4', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat4_2D_redo1_tunejoint1_trial5_proj/cat4_2D_redo1_tunejoint1_trial5_proj_projection.pth', help='Path to pretrained model weights for category 4')
     
     parser.add_argument('--fusion_backbone1', type=str, default='resnet1d18', help='Backbone for 1D rhythm model (category 1)')
     parser.add_argument('--fusion_backbone3', type=str, default='resnet18', help='Backbone for 2D partial morphology model (category 3)')
@@ -90,7 +90,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--fusion_single_ppc1', type=int, default=5, help='Single-class prototypes per class for category 1')
     parser.add_argument('--fusion_single_ppc3', type=int, default=18, help='Single-class prototypes per class for category 3')
-    parser.add_argument('--fusion_single_ppc4', type=int, default=3, help='Single-class prototypes per class for category 4')
+    parser.add_argument('--fusion_single_ppc4', type=int, default=7, help='Single-class prototypes per class for category 4')
 
     parser.add_argument('--fusion_joint_ppb1', type=int, default=0, help='Joint prototypes per border for category 1')
     parser.add_argument('--fusion_joint_ppb3', type=int, default=0, help='Joint prototypes per border for category 3')
