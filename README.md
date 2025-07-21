@@ -145,7 +145,7 @@ python tune.py \
    - Model/Training/Tuning Repo: [Sahil Sethi](https://github.com/sahilsethi0105)
      - This is an original codebase but contains some elements heavily inspired by [ProtoPMed-EEG](https://github.com/chengstark/ProtoPMed-EEG), [TesNet](https://github.com/JackeyWang96/TesNet), & [ProtoPNet](https://github.com/cfchen-duke/ProtoPNet)
      - We developed our approach as an extension of the above papers
-   - User Interface (see below): [David Chen](https://github.com/sudoris)
+   - User Interface (see below) and `inference_fusion.py`: [David Chen](https://github.com/sudoris)
 
 ![Alt text](evaluation_interface.jpg)
 
