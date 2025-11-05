@@ -15,7 +15,6 @@ RESULTS_ROOT = (
     f"{BASE_DIR}/results/ultimate_comparison/protoecgnet/protoecgnet_all"
 )
 
-# 👇 THIS was missing
 PROCESSED_DIR = f"{BASE_DIR}/processed"
 
 GPUS = [0, 1, 2, 3]
@@ -114,7 +113,7 @@ def run_job(args):
         "--test_dir",
         str(run_dir),
         "--processed_dir",
-        PROCESSED_DIR,          # 👈 this fixes the “could not build dataloaders”
+        PROCESSED_DIR,         
         "--mode",
         mode,
     ]
@@ -122,7 +121,7 @@ def run_job(args):
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
 
-    print(f"\n🚀 Launching {exp} on GPU {gpu_id}")
+    print(f"\n Launching {exp} on GPU {gpu_id}")
     with open(log_path, "a") as lf:
         lf.write(f"\n[{datetime.datetime.now()}] === {exp} on GPU {gpu_id} ===\n")
         try:
@@ -161,7 +160,7 @@ def main():
     with Pool(processes=len(GPUS)) as pool:
         pool.map(run_job, tasks)
 
-    print(f"\n✅ All runs complete. Logs saved at: {log_path}")
+    print(f"\n All runs complete. Logs saved at: {log_path}")
 
 
 if __name__ == "__main__":
