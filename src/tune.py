@@ -212,7 +212,7 @@ def objective(trial):
         filename='{epoch}-{val_auc:.4f}',
         monitor='val_auc',
         mode='max',
-        save_top_k=1, #adjust if you don't want to save models during tuning
+        save_top_k=1, #adjust if don't want to save models during tuning
         save_last=False,
     )
     early_stop_callback = EarlyStopping(monitor='val_auc', patience=5, mode='max')

@@ -5,11 +5,11 @@ import torch
 import pandas as pd
 import torch.nn as nn
 
-# NOTE: ecg_utils in your repo doesn't export DATASET_PATH,
+# NOTE: ecg_utils in repo doesn't export DATASET_PATH,
 # so we only import get_dataloaders.
 from ecg_utils import get_dataloaders
 
-# These imports are in your original file; keeping them
+# These imports are in original file; keeping them
 from proto_models1D import ProtoECGNet1D
 from proto_models2D import ProtoECGNet2D
 
@@ -19,8 +19,8 @@ def _get_dataset_path() -> Path:
     Figure out where the processed EchoNext data lives.
 
     Priority:
-    1. Env var ECHONEXT_PROCESSED_DIR (you can set this before running)
-    2. ../../processed relative to this file (your repo layout)
+    1. Env var ECHONEXT_PROCESSED_DIR ( can set this before running)
+    2. ../../processed relative to this file (repo layout)
     """
     env = os.environ.get("ECHONEXT_PROCESSED_DIR")
     if env:
@@ -115,7 +115,7 @@ def get_fusion_dataloaders(args, return_sample_ids: bool = False):
     """
     label_mappings = load_fusion_label_mappings()
 
-    # normal ECG dataloading from your repo
+    # normal ECG dataloading from   repo
     train_loader, val_loader, test_loader, class_weights = get_dataloaders(
         batch_size=args.batch_size,
         mode="2D",  # so we get shape (N, 1, 12, T)
