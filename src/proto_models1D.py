@@ -1,541 +1,470 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+proto_models1D.py
+Extended to support custom 1D CNN-family backbones (simple/deep/wide, cnn_lstm, etc.)
+with automatic channel adaptation and feature-dim inference.
+
+This version is the long one (not the shortened one) and matches what
+Lightning script expects.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from itertools import combinations
 from functools import reduce
 import operator as op
+
+# ---------------------------------------------------------------------
+# Sahil's ResNet backbones
+# ---------------------------------------------------------------------
 from backbones import (
-    resnet1d18, resnet1d34, resnet1d50, 
-    resnet1d101, resnet1d152
+    resnet1d18,
+    resnet1d34,
+    resnet1d50,
+    resnet1d101,
+    resnet1d152,
 )
 
-def prototype_loss1d(logits, y_true, model, similarity_scores, class_weights, 
-                   lam_clst, lam_sep, lam_spars, lam_div, lam_cnrst, use_contrastive=True):
-    """
-    Prototype-based loss function for ProtoECGNet1D.
-    - Uses precomputed similarity scores from the model's forward pass.
-    """
+# ---------------------------------------------------------------------
+# Custom CNN-family backbones
+# ---------------------------------------------------------------------
+from custom_backbones import (
+    simple_cnn,
+    deep_cnn,
+    wide_cnn,
+    cnn_gru,
+    cnn_lstm,
+    cnn_transformer,
+    inception_cnn,
+)
 
-    # Ensure all tensors are on the same device
-    device = model.prototype_vectors.device
+# ---------------------------------------------------------------------
+# Loss
+# ---------------------------------------------------------------------
+def prototype_loss1d(
+    logits,
+    y_true,
+    model,
+    similarity_scores,
+    lam_clst,
+    lam_sep,
+    lam_spars,
+    lam_div,
+    lam_cnrst,
+    class_weights=None,
+):
+    device = logits.device
     y_true = y_true.to(device).float()
-    logits = logits.to(device)
     similarity_scores = similarity_scores.to(device)
+
+    # --- classification loss ---
     if class_weights is not None:
         class_weights = class_weights.to(device)
+        cls_loss = F.binary_cross_entropy_with_logits(
+            logits, y_true, pos_weight=class_weights
+        )
+    else:
+        cls_loss = F.binary_cross_entropy_with_logits(logits, y_true)
 
-    # Expand prototype_class_identity to match batch dimension
-    prototypes_of_correct_class = model.prototype_class_identity.unsqueeze(0).expand(y_true.shape[0], -1, -1).to(device)
+    # if model has no prototype_vectors we just return classification
+    if not hasattr(model, "prototype_vectors"):
+        return cls_loss
 
-    # Mask correct prototypes using ground-truth labels
-    prototypes_of_correct_class = prototypes_of_correct_class * y_true.unsqueeze(1)
+    B = y_true.size(0)
+    P = similarity_scores.size(1)
 
-    # Compute activations for correct class prototypes
-    correct_class_prototype_activations, _ = torch.max(similarity_scores.unsqueeze(-1) * prototypes_of_correct_class, dim=1)
-    
-    # Compute activations for incorrect class prototypes
-    prototypes_of_wrong_class = 1 - prototypes_of_correct_class
-    incorrect_class_prototype_activations, _ = torch.max(similarity_scores.unsqueeze(-1) * prototypes_of_wrong_class, dim=1)
+    proto_id = model.prototype_class_identity.to(device)
+    proto_id_b = proto_id.unsqueeze(0).expand(B, -1, -1)  # (B, P, C)
+    y_exp = y_true.unsqueeze(1)  # (B, 1, C)
 
-    # Clustering Loss (Encourage correct prototypes to activate)
-    clst_loss = -torch.mean(correct_class_prototype_activations)
+    # positive/negative masks for each prototype
+    correct_mask = proto_id_b * y_exp      # (B, P, C)
+    wrong_mask = 1 - correct_mask
 
-    # Separation Loss (Encourage incorrect prototypes to be inactive)
-    sep_loss = torch.mean(incorrect_class_prototype_activations)
+    sim_exp = similarity_scores.unsqueeze(-1)  # (B, P, 1)
+    correct_act, _ = torch.max(sim_exp * correct_mask, dim=1)  # (B, C)
+    wrong_act, _ = torch.max(sim_exp * wrong_mask, dim=1)      # (B, C)
 
-    # Sparsity Loss (Encourage fewer prototype activations per input); unused in our paper
-    spars_loss = torch.mean(torch.clamp(similarity_scores, min=0).sum(dim=1))
+    clst_loss = -correct_act.mean()
+    sep_loss = wrong_act.mean()
+    spars_loss = torch.clamp(similarity_scores, min=0).sum(dim=1).mean()
 
-    # Orthogonality Loss (Encourage diverse prototypes)
-    P = F.normalize(model.prototype_vectors, p=2, dim=1)  # shape: (P, D)
-    identity_matrix = torch.eye(P.shape[0], device=device)
-    div_loss = torch.norm(torch.mm(P, P.T) - identity_matrix, p="fro") ** 2
-    div_loss = div_loss / (model.num_prototypes ** 2)  # Normalize by number of prototypes
+    # diversity among prototypes
+    protos = model.prototype_vectors
+    protos = F.normalize(protos.view(P, -1), p=2, dim=1)
+    gram = protos @ protos.t()
+    eye = torch.eye(P, device=device)
+    div_loss = torch.norm(gram - eye, p="fro") ** 2 / (P ** 2)
 
-    if use_contrastive:
-        # Flatten and normalize prototypes
-        prototypes = model.prototype_vectors  # shape: (P, D)
-        prototypes_flat = prototypes.view(prototypes.shape[0], -1)
-        prototypes_norm = F.normalize(prototypes_flat, p=2, dim=1)  # shape: (P, D)
-
-        # Cosine similarity between all prototype pairs
-        sim_matrix = torch.mm(prototypes_norm, prototypes_norm.T)  # shape: (P, P)
-        sim_matrix = torch.clamp(sim_matrix, min=-1 + 1e-6, max=1 - 1e-6)
-
-        # Co-occurrence mask
-        P_assign = model.prototype_class_identity.float()  # (P, C)
+    # contrastive optional
+    cnrst_loss = torch.tensor(0.0, device=device)
+    has_cooccur = getattr(model, "label_cooccurrence", None) is not None
+    if has_cooccur and lam_cnrst > 0:
         L_cooccur = model.label_cooccurrence.to(device)
-
-        # Compute pairwise label co-occurrence score between prototype class assignments
-        pos_mask = torch.matmul(torch.matmul(P_assign, L_cooccur), P_assign.T)  # (P, P)
+        P_assign = model.prototype_class_identity.float().to(device)
+        pos_mask = P_assign @ L_cooccur @ P_assign.t()
         neg_mask = 1 - pos_mask
-
-        # Normalize masks to avoid scale issues
         pos_norm = pos_mask / (pos_mask.sum() + 1e-6)
         neg_norm = neg_mask / (neg_mask.sum() + 1e-6)
+        sim_pp = protos @ protos.t()
+        sim_pp = sim_pp.clamp(-1 + 1e-6, 1 - 1e-6)
+        pos_loss = (sim_pp * pos_norm).sum()
+        neg_loss = (sim_pp * neg_norm).sum()
+        cnrst_loss = -(pos_loss - neg_loss) / (P ** 0.5)
 
-        # Compute contrastive loss
-        pos_loss = torch.sum(sim_matrix * pos_norm)
-        neg_loss = torch.sum(sim_matrix * neg_norm)
-        cnrst_loss = - (pos_loss - neg_loss) / (model.num_prototypes ** 0.5)
-    else:
-        cnrst_loss = 0
+    total = (
+        cls_loss
+        + lam_clst * clst_loss
+        + lam_sep * sep_loss
+        + lam_spars * spars_loss
+        + lam_div * div_loss
+        + lam_cnrst * cnrst_loss
+    )
+    return total
 
 
-    # Multi-label Classification Loss
-    classification_loss = F.binary_cross_entropy_with_logits(logits, y_true, pos_weight=class_weights)
+# ---------------------------------------------------------------------
+# Channel adapter (defensive)
+# ---------------------------------------------------------------------
+class ChannelAdapter1D(nn.Module):
+    """
+    If datamodule gives (B, 1, L) but backbone expects (B, C, L) like 12,
+    we project 1 -> C.
+    If the input already has C channels, we just return it.
+    """
+    def __init__(self, in_ch=1, out_ch=12):
+        super().__init__()
+        self.proj = nn.Conv1d(in_ch, out_ch, kernel_size=1, bias=False)
 
-    print(f"Class loss: {classification_loss}")
-    print(f"Clst loss: {lam_clst*clst_loss}")
-    print(f"Sep loss: {lam_sep*spars_loss}")
-    print(f"Spars loss: {lam_spars*spars_loss}")
-    print(f"Div loss: {lam_div*div_loss}")
-    print(f"Cnrst loss: {lam_cnrst*cnrst_loss}")
+    def forward(self, x):
+        # x: (B, C, L)
+        if x.size(1) == self.proj.out_channels:
+            # already correct #channels
+            return x
+        return self.proj(x)
 
-    return classification_loss + lam_clst * clst_loss + lam_sep * sep_loss + lam_spars * spars_loss + lam_div * div_loss + lam_cnrst * cnrst_loss
 
+# ---------------------------------------------------------------------
+# ProtoECGNet1D
+# ---------------------------------------------------------------------
 class ProtoECGNet1D(nn.Module):
-    def __init__(self, backbone="resnet1d18", num_classes=5, single_class_prototype_per_class=5, joint_prototypes_per_border=2, proto_dim=512, 
-                prototype_activation_function="log", latent_space_type="l2", add_on_layers_type="linear", class_specific=False, last_layer_connection_weight=None, m=None, dropout=0, 
-                custom_groups=True, label_set='all', pretrained_weights=None):
-   
+    def __init__(
+        self,
+        backbone="resnet1d18",
+        num_classes=5,
+        single_class_prototype_per_class=5,
+        joint_prototypes_per_border=2,
+        proto_dim=512,
+        prototype_activation_function="log",
+        latent_space_type="l2",
+        add_on_layers_type="linear",
+        class_specific=False,
+        last_layer_connection_weight=1.0,
+        m=None,
+        dropout=0.0,
+        custom_groups=True,
+        label_set="all",
+        pretrained_weights=None,
+    ):
         super().__init__()
         self.joint_prototypes_per_border = joint_prototypes_per_border
         self.single_class_prototype_per_class = single_class_prototype_per_class
         self.num_classes = num_classes
 
-        num_class_pairs = self.ncr(num_classes, 2)  # Compute number of unique class pairs
-        self.num_prototypes = (self.single_class_prototype_per_class * self.num_classes) + (self.joint_prototypes_per_border * num_class_pairs)
-
+        # total prototypes = per-class + joint
+        num_class_pairs = self._ncr(num_classes, 2)
+        self.num_prototypes = (
+            self.single_class_prototype_per_class * self.num_classes
+            + self.joint_prototypes_per_border * num_class_pairs
+        )
         self.prototype_shape = (self.num_prototypes, proto_dim)
-        self.topk_k = 1  # not used in our global prototype implementation
 
         self.prototype_activation_function = prototype_activation_function
-        self.class_specific=class_specific # unused
-        self.epsilon = 1e-4 
-        self.m = m # unused
+        self.class_specific = class_specific
+        self.epsilon = 1e-4
+        self.m = m
         self.custom_groups = custom_groups
         self.label_set = label_set
-        self.relu_on_cos = False # unused
-        self.input_vector_length = proto_dim ** 0.5
-        self.last_layer_connection_weight = last_layer_connection_weight 
-        
+        self.relu_on_cos = False
+        self.last_layer_connection_weight = last_layer_connection_weight
         self.latent_space_type = latent_space_type
 
-        try:
-            if self.custom_groups:
-                if self.label_set == "1":
-                    path = "/gpfs/data/bbj-lab/users/sethis/experiments/preprocessing/label_cooccur_Cat1.pt"
-                elif self.label_set == "3":
-                    path = "/gpfs/data/bbj-lab/users/sethis/experiments/preprocessing/label_cooccur_Cat3.pt"
-                elif self.label_set == "4":
-                    path = "/gpfs/data/bbj-lab/users/sethis/experiments/preprocessing/label_cooccur_Cat4.pt"
-                else:
-                    path = "/gpfs/data/bbj-lab/users/sethis/experiments/preprocessing/label_cooccur.pt"
-            else:
-                path = "/gpfs/data/bbj-lab/users/sethis/experiments/preprocessing/label_cooccur_all.pt"
+        # author sometimes had label co-occurrence; for EchoNext you disabled it
+        self.label_cooccurrence = None
+        print("[INFO] Label co-occurrence disabled for EchoNext dataset")
 
-            cooc_matrix = torch.load(path)
-            self.label_cooccurrence = cooc_matrix.to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
-            print(f"[INFO] Loaded label co-occurrence matrix from {path} with shape {self.label_cooccurrence.shape}")
-        except Exception as e:
-            self.label_cooccurrence = None
-            print(f"[WARNING] Failed to load label co-occurrence matrix: {e}")
-
-
-        # Select backbone feature extractor
+        # --------------------------------------------------------------
+        # 1) build backbone (author + custom)
+        # --------------------------------------------------------------
         print(f"Initializing ProtoECGNet1D with backbone {backbone}...")
-        self.feature_extractor, backbone_only = self._get_backbone(backbone, num_classes, dropout, pretrained_weights)
-        feature_dim = proto_dim
-
-
-        #Even if loading state_dict() from full model checkpoint, have to initialize all components
-        self.feature_extractor.fc = nn.Identity()  # Remove classifier head
-        
-        #print(f"[DEBUG] Extracted Feature Dim: {feature_dim}") 
-        
-        self.prototype_vectors = nn.Parameter(torch.randn(*self.prototype_shape), requires_grad=True)
-        self.ones = nn.Parameter(torch.ones_like(self.prototype_vectors), requires_grad=False) #unused
-        self.classifier = nn.Linear(self.num_prototypes, num_classes, bias=False)
-
-        # Initialize Prototype Class Assignments
-        self.register_buffer(
-            "prototype_class_identity",
-            self._create_prototype_labels(num_classes, single_class_prototype_per_class, joint_prototypes_per_border)
+        backbone_model, backbone_only = self._get_backbone(
+            backbone, num_classes, dropout, pretrained_weights
         )
 
-        self.prototype_class_identity = self.prototype_class_identity.to(self.prototype_vectors.device)
+        # --------------------------------------------------------------
+        # 2) maybe wrap with channel adapter (1 -> needed_channels)
+        # --------------------------------------------------------------
+        backbone_model = self._maybe_wrap_channel_adapter(backbone_model)
 
-        self._initialize_add_on_layers(add_on_layers_type, feature_dim)
+        # resnets have .fc, zero it out
+        self.feature_extractor = backbone_model
+        if hasattr(self.feature_extractor, "fc"):
+            self.feature_extractor.fc = nn.Identity()
+
+        # --------------------------------------------------------------
+        # 3) infer backbone feature dim from dummy forward
+        # --------------------------------------------------------------
+        backbone_feat_dim = self._infer_backbone_feat_dim(self.feature_extractor)
+
+        # --------------------------------------------------------------
+        # 4) create prototype vectors + classifier
+        # --------------------------------------------------------------
+        self.prototype_vectors = nn.Parameter(
+            torch.randn(*self.prototype_shape), requires_grad=True
+        )
+        self.ones = nn.Parameter(
+            torch.ones_like(self.prototype_vectors), requires_grad=False
+        )
+        self.classifier = nn.Linear(self.num_prototypes, num_classes, bias=False)
+
+        # prototype -> label assignment matrix
+        self.register_buffer(
+            "prototype_class_identity",
+            self._create_prototype_labels(
+                num_classes,
+                single_class_prototype_per_class,
+                joint_prototypes_per_border,
+            ),
+        )
+
+        # --------------------------------------------------------------
+        # 5) add-on layers to map backbone feat -> proto_dim
+        # --------------------------------------------------------------
+        self._initialize_add_on_layers(add_on_layers_type, backbone_feat_dim, proto_dim)
+
+        # --------------------------------------------------------------
+        # 6) init weights + classifier connections
+        # --------------------------------------------------------------
         self._initialize_weights()
-        
+
         if backbone_only:
-            print("Reset prototypes and classifier (Backbone-only checkpoint detected).")
-        elif (pretrained_weights is not None):
-            # Full model checkpoint detected, load everything
-            print(f"Now loading full model from {pretrained_weights}")
-            checkpoint = torch.load(pretrained_weights, map_location=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), weights_only=False)
-            if 'state_dict' in checkpoint:  # Extract if it's a Lightning checkpoint
-                state_dict = checkpoint['state_dict']
-            else:
-                state_dict = checkpoint  # Assume it's already just weights
-            new_state_dict = {}
-            for k, v in state_dict.items():
-                new_key = k.replace("model.", "")  # Remove extra prefix
-                new_state_dict[new_key] = v
-            if 'criterion.pos_weight' in new_state_dict:
-                #print("Removing 'criterion.pos_weight' from checkpoint.")
-                del new_state_dict["criterion.pos_weight"]
+            print("Reset prototypes and classifier (backbone-only checkpoint detected).")
 
-            # Detect number of prototypes in the checkpoint
-            if "prototype_vectors" in new_state_dict:
-                loaded_prototypes = new_state_dict["prototype_vectors"].shape[0]
-                print(f"Checkpoint contains {loaded_prototypes} prototypes. Adjusting model initialization.")
-                self.num_prototypes = loaded_prototypes
-                self.prototype_shape = (self.num_prototypes, proto_dim)
-
-            #Adjust shape of prototype_vectors and classifier to match checkpoint
-            self.ones = nn.Parameter(torch.ones(self.prototype_shape), requires_grad=False)
-            self.prototype_vectors = nn.Parameter(torch.randn(*self.prototype_shape), requires_grad=True)
-            self.classifier = nn.Linear(self.num_prototypes, self.num_classes, bias=False)
-            if self.num_prototypes == ((self.single_class_prototype_per_class * self.num_classes) + (self.joint_prototypes_per_border * num_class_pairs)):
-                self._create_prototype_labels(num_classes, single_class_prototype_per_class, joint_prototypes_per_border)
-            else: 
-                self.prototype_class_identity = torch.zeros(self.num_prototypes, self.num_classes)
-
-            # print(f"[DEBUG] Checkpoint Keys: {list(new_state_dict.keys())}") 
-            # if "prototype_class_identity" in new_state_dict:
-            #     print(f"[DEBUG] Loaded Prototype Class Identity Matrix Shape: {self.prototype_class_identity.shape}")
-            #     print(f"[DEBUG] Loaded Prototype Class Identity Matrix:\n{self.prototype_class_identity.cpu().numpy()}")
-            # else:
-            #     print("[WARNING] No `prototype_class_identity` found in checkpoint! Using initialized values.")
-
-            self.load_state_dict(new_state_dict, strict=True)
-
-    def _create_prototype_labels(self, num_classes, single_class_prototype_per_class, joint_prototypes_per_border):
-        """Assigns class identities to prototypes (single-class & dual-class) and prints debugging info."""
-        identity_matrix = torch.zeros((num_classes * single_class_prototype_per_class) + 
-                                    (len(list(combinations(range(num_classes), 2))) * joint_prototypes_per_border), num_classes)
-
-        # Debug tracking
-        single_class_counts = {j: 0 for j in range(num_classes)}
-        dual_class_counts = {pair: 0 for pair in combinations(range(num_classes), 2)}
-
-        # Assign Single-Class Prototypes
-        for j in range(num_classes):
-            for k in range(single_class_prototype_per_class):
-                idx = j * single_class_prototype_per_class + k
-                identity_matrix[idx, j] = 1
-                single_class_counts[j] += 1  # Track assignment
-
-        # Assign Joint-Class Prototypes
-        class_combinations = list(combinations(range(num_classes), 2))
-        dual_start_idx = single_class_prototype_per_class * num_classes  # Start index for dual-class prototypes
-
-        for i, (c1, c2) in enumerate(class_combinations):
-            for k in range(joint_prototypes_per_border):
-                idx = dual_start_idx + i * joint_prototypes_per_border + k
-                identity_matrix[idx, c1] = 1
-                identity_matrix[idx, c2] = 1
-                dual_class_counts[(c1, c2)] += 1  # Track assignment
-
-        # Debugging Prints
-        # print(f"[DEBUG] Identity matrix shape: {identity_matrix.shape}")
-        # print(f"[DEBUG] Total single-class prototypes assigned: {sum(single_class_counts.values())}")
-        # print(f"[DEBUG] Total dual-class prototypes assigned: {sum(dual_class_counts.values())}")
-        # print(f"[DEBUG] Single-class prototype distribution per class: {single_class_counts}")
-        # print(f"[DEBUG] Dual-class prototype distribution per border: {dual_class_counts}")
-
-        return identity_matrix
-        
-    def _initialize_add_on_layers(self, add_on_layers_type, feature_dim):
-        """Initializes add-on layers before prototype matching."""
-        if add_on_layers_type == "other": #bottleneck
-            self.add_on_layers = nn.Sequential(
-                nn.Linear(feature_dim, feature_dim // 2),
-                nn.ReLU(),
-                nn.Linear(feature_dim // 2, feature_dim),
-                nn.Sigmoid()
-            )
-        elif add_on_layers_type == "identity":
-            self.add_on_layers = nn.Identity()  # No transformation applied
-        elif add_on_layers_type == "linear":
-            self.add_on_layers = nn.Sequential(
-                nn.Linear(feature_dim, feature_dim),
-                nn.ReLU(),
-                nn.Linear(feature_dim, feature_dim),
-                nn.Sigmoid()
-            )
-    
-    def conv_features(self, x):
-        """Extract feature representations from input."""
-        x = self.feature_extractor(x)
-        #print(f"[DEBUG] Feature Extractor Raw Output Shape: {x.shape}")  # Should be (batch, feature_dim)
-
-        if x.dim() == 3:  # If output has (batch, C, T), apply pooling
-            x = torch.mean(x, dim=-1)  # Reduce across time dimension (batch, C, T) → (batch, C)
-            #print(f"[DEBUG] Feature Extractor Shape After Global Pooling: {x.shape}")
-
-        if not isinstance(self.add_on_layers, nn.Identity):
-            x = self.add_on_layers(x)  
-            #print(f"[DEBUG] After Add-On Layers Shape: {x.shape}")
-
-        return x  # Ensure (batch, feature_dim)
-
+    # --------------------------------------------------------------
     @staticmethod
-    def ncr(n, r):
-        """Computes n choose r (combinations)."""
+    def _ncr(n, r):
         r = min(r, n - r)
         numer = reduce(op.mul, range(n, n - r, -1), 1)
         denom = reduce(op.mul, range(1, r + 1), 1)
         return numer // denom
 
-    def prototype_distances(self, x, prototypes_of_wrong_class=None):
-        """Computes prototype distances using L2 convolution or cosine activation."""
-        conv_features = self.conv_features(x)
-        if self.latent_space_type == "l2":
-            return self._l2_convolution(conv_features)
-        elif self.latent_space_type == "arc":
-            return self.cos_activation(conv_features, prototypes_of_wrong_class)
-        else:
-            raise ValueError(f"Unsupported latent space type: {self.latent_space_type}")
-        
-    def distance_2_similarity(self, distances):
-        """Converts prototype distances to similarity scores based on activation function."""
-        if self.prototype_activation_function == "log":
-            return torch.log((distances + 1) / (distances + self.epsilon))
-        elif self.prototype_activation_function == "linear":
-            return -distances
-        else:
-            return self.prototype_activation_function(distances)
-    
-    def _initialize_weights(self):
-        """Initializes weights for the model"""
-        for m in self.add_on_layers.modules():
-            if isinstance(m, nn.Conv1d): 
-                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
+    def _create_prototype_labels(
+        self,
+        num_classes,
+        single_class_prototype_per_class,
+        joint_prototypes_per_border,
+    ):
+        pairs = list(combinations(range(num_classes), 2))
+        P = num_classes * single_class_prototype_per_class + len(pairs) * joint_prototypes_per_border
+        mat = torch.zeros(P, num_classes)
+        # per-class protos
+        for c in range(num_classes):
+            for k in range(single_class_prototype_per_class):
+                idx = c * single_class_prototype_per_class + k
+                mat[idx, c] = 1
+        # joint protos
+        start = num_classes * single_class_prototype_per_class
+        for i, (c1, c2) in enumerate(pairs):
+            for k in range(joint_prototypes_per_border):
+                idx = start + i * joint_prototypes_per_border + k
+                mat[idx, c1] = 1
+                mat[idx, c2] = 1
+        return mat
 
-            elif isinstance(m, nn.BatchNorm1d):  
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-        # Set correct and incorrect class connections in classifier
-        self.set_last_layer_incorrect_connection()
-
-    def set_last_layer_incorrect_connection(self, incorrect_class_connection=-0.5):
-        """Ensures classifier weight connections are set correctly"""
-        if not hasattr(self, "prototype_class_identity"):
-            raise ValueError("[ERROR] prototype_class_identity not found. Ensure it's initialized before calling this method.")
-
-        correct_class_connection = self.last_layer_connection_weight
-        positive_one_weights_locations = self.prototype_class_identity.T  # (num_classes, num_prototypes)
-        negative_one_weights_locations = 1 - positive_one_weights_locations  # Inverse mask for incorrect class connections
-
-        self.classifier.weight.data.copy_(
-            correct_class_connection * positive_one_weights_locations +
-            incorrect_class_connection * negative_one_weights_locations
-        )
-
-        print(f"Updated classifier weight matrix: Correct = {correct_class_connection}, Incorrect = {incorrect_class_connection}")
-
-
+    # --------------------------------------------------------------
+    # backbone registry
+    # --------------------------------------------------------------
     def _get_backbone(self, backbone, num_classes, dropout, pretrained_weights):
-        """Selects and initializes a 1D backbone, loading full model if available."""
-        
         backbones = {
-            "resnet1d18": resnet1d18, "resnet1d34": resnet1d34, "resnet1d50": resnet1d50,
-            "resnet1d101": resnet1d101, "resnet1d152": resnet1d152
+            # Author
+            "resnet1d18": resnet1d18,
+            "resnet1d34": resnet1d34,
+            "resnet1d50": resnet1d50,
+            "resnet1d101": resnet1d101,
+            "resnet1d152": resnet1d152,
+            # Custom
+            "simple_cnn": simple_cnn,
+            "deep_cnn": deep_cnn,
+            "wide_cnn": wide_cnn,
+            "cnn_gru": cnn_gru,
+            "cnn_lstm": cnn_lstm,
+            "cnn_transformer": cnn_transformer,
+            "inception_cnn": inception_cnn,
         }
-        
+
         if backbone not in backbones:
             raise ValueError(f"Unsupported 1D backbone: {backbone}")
 
-        # Initialize model
         model = backbones[backbone](num_classes=num_classes, dropout=dropout)
-        backbone_only = False 
-        
-        # Load pre-trained weights if provided
-        if pretrained_weights is not None: 
-            checkpoint = torch.load(pretrained_weights, map_location=torch.device('cuda' if torch.cuda.is_available() else 'cpu'), weights_only=False)
+        backbone_only = False
 
-            if 'state_dict' in checkpoint:  # Extract if it's a Lightning checkpoint
-                state_dict = checkpoint['state_dict']
+        if pretrained_weights is not None:
+            ckpt = torch.load(
+                pretrained_weights,
+                map_location=torch.device("cuda" if torch.cuda.is_available() else "cpu"),
+            )
+            state = ckpt["state_dict"] if "state_dict" in ckpt else ckpt
+            has_proto = any("prototype_vectors" in k for k in state.keys())
+            has_clf = any("classifier" in k for k in state.keys())
+            if not (has_proto or has_clf):
+                print(f"Loading backbone-only weights from {pretrained_weights}")
+                model.load_state_dict(state, strict=False)
+                backbone_only = True
             else:
-                state_dict = checkpoint  # Assume it's already just weights
-            
-            # Check if checkpoint contains prototype & classifier layers
-            contains_prototypes = any("prototype_vectors" in k for k in state_dict.keys())
-            contains_classifier = any("classifier" in k for k in state_dict.keys())
-
-            if contains_prototypes and contains_classifier:
-                print(f"Full ProtoECGNet1D checkpoint detected. Skipping backbone-only loading...")
-                backbone_only = False
-            else:
-                # Only load feature extractor weights, keeping prototypes/classifier unchanged
-                print(f"Loading backbone-only weights from {pretrained_weights} (Prototypes & Classifier Unchanged)...")
-                model.load_state_dict(state_dict, strict=False)
-                backbone_only = True 
-
+                print(f"[INFO] Loaded full pretrained model weights from {pretrained_weights}")
         else:
             print("No pretrained weights provided")
 
         return model, backbone_only
-    
-    def forward(self, x, prototypes_of_wrong_class=None):
-        """Forward pass with feature extraction, prototype similarity, and classification."""
 
-        features = self.conv_features(x)  # Extract feature representations
-        #print(f"[DEBUG] Feature Extractor Output Shape: {features.shape}")  # Expected: (batch, feature_dim)
-
-        if self.latent_space_type == "l2":
-            distances = self._l2_convolution(features)  # Compute L2 distances
-            #print(f"[DEBUG] L2 Distance Shape: {distances.shape}")  # Expected: (batch, num_prototypes)
-            
-            min_distances = distances #Since doing global prototypes, just use distances
-
-            #print(f"[DEBUG] Min Distances Shape: {min_distances.shape}")  # Expected: (batch, num_classes)
-
-            # Convert distances to activations
-            prototype_activations = self.distance_2_similarity(min_distances)
-            #print(f"[DEBUG] Prototype Activations Shape: {prototype_activations.shape}")  # Expected: (batch, num_prototypes)
-
-            # Compute logits: (batch, num_classes)
-            logits = self.classifier(prototype_activations)
-            #print(f"[DEBUG] Logits Shape: {logits.shape}")  # Expected: (batch, num_classes)
-
-            return logits, min_distances, prototype_activations
-
-        elif self.latent_space_type == "arc":
-            activations, marginless_activations = self.cos_activation(features, prototypes_of_wrong_class)
-            #print(f"[DEBUG] Cosine Activation Shape: {activations.shape}")  # Expected: (batch_size, num_prototypes)
-
-            # No max pooling for global prototypes, just use activations as they are
-            prototype_activations = activations  # (batch_size, num_prototypes)
-            marginless_prototype_activations = marginless_activations  # (batch_size, num_prototypes)
-
-            # Compute logits: (batch_size, num_classes) 
-            logits = self.classifier(prototype_activations)  
-            marginless_logits = self.classifier(marginless_prototype_activations)
-
-            #print(f"[DEBUG] Logits Shape: {logits.shape}")  # Expected: (batch_size, num_classes)
-
-            return logits, marginless_logits, prototype_activations
-
-    def push_forward(self, x):
-        """Extracts feature representations and similarity scores for prototype pushing."""
-        
-        features = self.conv_features(x)  # Extract feature representations
-
-        if self.latent_space_type == "l2":
-            distances = self._l2_convolution(features)  # Compute L2 distances
-            activations = self.distance_2_similarity(distances)  # Convert distances to activations
-            return features, activations  # (batch_size, feature_dim), (batch_size, num_prototypes)
-
-        elif self.latent_space_type == "arc":
-            activations, marginless_activations = self.cos_activation(features)  # Get both activations
-            return features, activations  # Use actual activations (not marginless)
-
-        else:
-            raise ValueError(f"Unsupported latent space type: {self.latent_space_type}")
-
-        
-    def _l2_convolution(self, x):
+    # --------------------------------------------------------------
+    def _maybe_wrap_channel_adapter(self, backbone_model):
         """
-        Computes Euclidean (L2) distance between feature vectors and prototype vectors.
-        - x: (batch, feature_dim) extracted feature representations.
-        - self.prototype_vectors: (num_prototypes, feature_dim)
-
-        Returns:
-        - distances: (batch, num_prototypes) Euclidean distance from each feature to each prototype.
+        Detect the first Conv1d in the backbone. If it wants >1 channel,
+        wrap a 1->C adapter in front. The adapter itself is defensive,
+        so if the batch already has C channels it will just pass through.
         """
+        in_ch_needed = None
+        for _, mod in backbone_model.named_modules():
+            if isinstance(mod, nn.Conv1d):
+                in_ch_needed = mod.in_channels
+                break
 
-        #print(f"[DEBUG] Input to L2 Convolution: {x.shape}")
+        if in_ch_needed is None:
+            # backbone has no conv1d? ok
+            return backbone_model
 
-        # Compute L2 distance 
-        distances = torch.cdist(x, self.prototype_vectors, p=2)  # (batch, num_prototypes)
+        if in_ch_needed > 1:
+            print(f"[INFO] Adding channel adapter: 1 -> {in_ch_needed}")
+            return nn.Sequential(
+                ChannelAdapter1D(1, in_ch_needed),
+                backbone_model,
+            )
 
-        #print(f"[DEBUG] L2 Distances Shape: {distances.shape}")
-        return distances  # Ensure (batch, num_prototypes) shape
+        return backbone_model
 
-    def cos_activation(self, x, prototypes_of_wrong_class=None):
+    # --------------------------------------------------------------
+    def _infer_backbone_feat_dim(self, backbone):
         """
-        Computes cosine similarity between input features and prototype vectors.
-        - x: (batch, feature_dim)
-        - self.prototype_vectors: (num_prototypes, feature_dim)
-
-        Returns:
-        - activations: (batch, num_prototypes) Cosine similarity scores.
-        - marginless_activations: (batch, num_prototypes) Same as activations (for now).
+        Run a dummy through the backbone to find feature dim.
+        Assumes ECG length ~2500 (fits 500Hz, 5s example).
         """
+        device = next(backbone.parameters()).device
 
-        #print(f"[DEBUG] Input to Cosine Activation: {x.shape}")
+        # figure out how many channels this *wrapped* backbone wants
+        # for nn.Sequential(adapter, backbone) the first real module is index 1
+        modules = list(backbone.modules())
+        # default
+        in_ch = 1
+        for m in modules:
+            if isinstance(m, nn.Conv1d):
+                in_ch = m.in_channels
+                break
 
-        # Normalize features and prototypes
-        x_normalized = F.normalize(x, p=2, dim=1)  # (batch, feature_dim)
-        prototypes_normalized = F.normalize(self.prototype_vectors, p=2, dim=1)  # (num_prototypes, feature_dim)
-
-        # Compute cosine similarity (batch, num_prototypes)
-        activations = torch.mm(x_normalized, prototypes_normalized.T)  
-
-        #print(f"[DEBUG] Cosine Activations Shape: {activations.shape}")
-
-        # Margin-based cosine distance (not used here; so we just assign it to activations)
-        marginless_activations = activations  
-        return activations, marginless_activations
-
-    def prune_prototypes(self, prototypes_to_prune):
-        """
-        Removes specified prototypes from the model.
-
-        Args:
-            prototypes_to_prune: List of prototype indices to remove.
-        """
-        # Ensure valid prototype indices
-        if not prototypes_to_prune:
-            print("No prototypes to prune.")
-            return
-
-        print(f"Pruning prototypes: {prototypes_to_prune}")
-
-        # Determine which prototypes to keep
-        prototypes_to_keep = sorted(set(range(self.num_prototypes)) - set(prototypes_to_prune))
-
-        # Update prototype vectors
-        self.prototype_vectors = nn.Parameter(self.prototype_vectors.data[prototypes_to_keep], requires_grad=True)
-
-        # Update prototype shape & count
-        self.num_prototypes = len(prototypes_to_keep)
-        self.prototype_shape = list(self.prototype_vectors.size())
-
-        # Create a new classifier with updated input size
-        old_weights = self.classifier.weight.data[:, prototypes_to_keep].clone()  # Keep only valid weights
-        self.classifier = nn.Linear(self.num_prototypes, self.num_classes, bias=False).to(self.prototype_vectors.device)
-
-        # Copy back the old weights safely
+        dummy = torch.randn(1, in_ch, 2500, device=device)
         with torch.no_grad():
-            self.classifier.weight.copy_(old_weights)
+            feats = backbone(dummy)
 
-        # Update `self.ones` 
-        if hasattr(self, "ones"):
-            self.ones = nn.Parameter(self.ones.data[prototypes_to_keep], requires_grad=False)
+        # some custom CNNs return (B, C, T); pool over T
+        if feats.dim() == 3:
+            feats = feats.mean(dim=-1)
 
-        # Update prototype class identity matrix
-        self.prototype_class_identity = self.prototype_class_identity[prototypes_to_keep, :]
+        feat_dim = feats.shape[1]
+        return feat_dim
 
-        print(f"New prototype count: {self.num_prototypes}")
+    # --------------------------------------------------------------
+    def _initialize_add_on_layers(self, add_on_layers_type, in_dim, proto_dim):
+        if add_on_layers_type == "identity":
+            self.add_on_layers = nn.Identity()
+        else:
+            # simple MLP
+            self.add_on_layers = nn.Sequential(
+                nn.Linear(in_dim, in_dim),
+                nn.ReLU(),
+                nn.Linear(in_dim, proto_dim),
+                nn.Sigmoid(),
+            )
+        print(f"[INFO] Built add_on_layers with input dim {in_dim} -> proto_dim {proto_dim}")
 
-    def __repr__(self):
-        """String representation of the model for debugging and inspection."""
-        rep = (
-            "ProtoECGNet1D(\n"
-            "\tfeatures: {},\n"
-            "\tprototype_shape: {},\n"
-            "\tnum_classes: {},\n"
-            "\tepsilon: {}\n"
-            ")"
+    # --------------------------------------------------------------
+    def _initialize_weights(self):
+        for m in self.add_on_layers.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.kaiming_normal_(m.weight, mode="fan_out", nonlinearity="relu")
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.BatchNorm1d):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        self.set_last_layer_incorrect_connection()
+
+    # --------------------------------------------------------------
+    def set_last_layer_incorrect_connection(self, incorrect_class_connection=-0.5):
+        if not hasattr(self, "prototype_class_identity"):
+            raise ValueError("prototype_class_identity missing")
+        correct = self.last_layer_connection_weight
+        pos_mask = self.prototype_class_identity.T  # (C, P)
+        neg_mask = 1 - pos_mask
+        self.classifier.weight.data.copy_(
+            correct * pos_mask + incorrect_class_connection * neg_mask
+        )
+        print(
+            f"Updated classifier weight matrix: "
+            f"Correct = {correct}, Incorrect = {incorrect_class_connection}"
         )
 
-        return rep.format(self.feature_extractor, self.prototype_shape, self.num_classes, self.epsilon)
+    # --------------------------------------------------------------
+    # Forward stuff
+    # --------------------------------------------------------------
+    def conv_features(self, x):
+        feats = self.feature_extractor(x)
+        if feats.dim() == 3:
+            # (B, C, T) -> (B, C)
+            feats = feats.mean(dim=-1)
+        feats = self.add_on_layers(feats)
+        return feats
 
+    def _l2_convolution(self, feats):
+        return torch.cdist(feats, self.prototype_vectors, p=2)
+
+    def distance_2_similarity(self, dists):
+        if self.prototype_activation_function == "log":
+            return torch.log((dists + 1.0) / (dists + self.epsilon))
+        elif self.prototype_activation_function == "linear":
+            return -dists
+        else:
+            # assume it's a callable
+            return self.prototype_activation_function(dists)
+
+    def forward(self, x, prototypes_of_wrong_class=None):
+        feats = self.conv_features(x)
+        if self.latent_space_type == "l2":
+            dists = self._l2_convolution(feats)
+            activations = self.distance_2_similarity(dists)
+            logits = self.classifier(activations)
+            return logits, dists, activations
+        else:
+            feats_n = F.normalize(feats, p=2, dim=1)
+            protos_n = F.normalize(self.prototype_vectors, p=2, dim=1)
+            acts = feats_n @ protos_n.t()
+            logits = self.classifier(acts)
+            return logits, acts, acts
+
+    def push_forward(self, x):
+        feats = self.conv_features(x)
+        dists = self._l2_convolution(feats)
+        acts = self.distance_2_similarity(dists)
+        return feats, acts

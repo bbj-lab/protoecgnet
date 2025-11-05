@@ -5,8 +5,8 @@ This script provides standalone inference capabilities for trained ProtoECGNet f
 that combine 1D rhythm, 2D partial morphology, and 2D global branches.
 
 Usage:
-    python inference_fusion.py --target-ecg 65 # will do inference on only ECG 65 (ensure that you choose a test ECG)
-    python inference_fusion.py --num-samples -1 # will do inference on the full test set if you use -1, otherwise you can specify a certain number of ECGs (this argument is overridden if you specify a target_ecg)
+    python inference_fusion.py --target-ecg 65 # will do inference on only ECG 65 (ensure that choose a test ECG)
+    python inference_fusion.py --num-samples -1 # will do inference on the full test set if  use -1, otherwise can specify a certain number of ECGs (this argument is overridden if specify a target_ecg)
 """
 
 import torch

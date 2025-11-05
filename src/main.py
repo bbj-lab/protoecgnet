@@ -1,262 +1,354 @@
-if __name__ == '__main__':
+#!/usr/bin/env python3
+# main.py — robust to proto model kwargs, matches training_functions.py,
+# uses processed_dir, and (now) actually finds the test CSV trainer saved.
+
+if __name__ == "__main__":
     import argparse
+    import os
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    import numpy as np
     import torch
-    from training_functions import train_model, test_model, seed_everything, ECGTrainer
-    from ecg_utils import get_dataloaders, load_label_mappings
-    from backbones import (
-        resnet1d18, resnet1d34, resnet1d50, resnet1d101, resnet1d152,  
-        resnet18, resnet34, resnet50, resnet101, resnet152
+
+    # big training file showed
+    from training_functions import (
+        train_model,
+        test_model,
+        seed_everything,
     )
+
+    from ecg_utils import get_dataloaders, load_label_mappings
     from proto_models1D import ProtoECGNet1D
     from proto_models2D import ProtoECGNet2D
-    from fusion import FusionProtoClassifier, load_fusion_label_mappings, get_fusion_dataloaders
-
-    torch.set_float32_matmul_precision("high")
-
-    def str2bool(v):
-        if isinstance(v, bool):
-            return v
-        if v.lower() in ('yes', 'true', 't', 'y', '1'):
-            return True
-        elif v.lower() in ('no', 'false', 'f', 'n', '0'):
-            return False
-        else:
-            raise argparse.ArgumentTypeError('Boolean value expected.')
-
-    # Argument parser
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--job_name', type=str, required=True)
-    parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--l2', type=float, default=0)
-    parser.add_argument('--l1', type=float, default=1e-4)
-    parser.add_argument('--lam_clst', type=float, default=0.004)
-    parser.add_argument('--lam_sep', type=float, default=0.0004)
-    parser.add_argument('--lam_spars', type=float, default=0)
-    parser.add_argument('--lam_div', type=float, default=250)
-    parser.add_argument('--lam_cnrst', type=float, default=300)
-    parser.add_argument('--proto_dim', type=int, default=512, help='Channel dimension of prototype vectors')
-    parser.add_argument('--proto_time_len', type=int, default=3, help='Time dimension of prototype vectors')
-    parser.add_argument('--prototype_activation_function', type=str, choices=['log', 'linear'], default='log')
-    parser.add_argument('--latent_space_type', type=str, choices=['l2', 'arc'], default='arc')
-    parser.add_argument('--add_on_layers_type', type=str, choices=['linear', 'identity', 'other'], default='linear')
-    parser.add_argument('--class_specific', type=str2bool, default=True, help='Whether to use class-specific prototypes')
-    parser.add_argument('--last_layer_connection_weight', type=float, default=1.0, help='Weight of last layer connection in the model')
-    parser.add_argument('--m', type=float, default=0.05, help='Margin for prototype learning') #unused in our paper
-    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", type=str, help="Device to use for projection (cuda or cpu)")
-    parser.add_argument('--dropout', type=float, default=0)
-    parser.add_argument('--checkpoint_dir', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints')
-    parser.add_argument('--log_dir', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/logs')
-    parser.add_argument('--test_dir', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/test_results')
-    parser.add_argument('--save_top_k', type=int, default=3)
-    parser.add_argument('--patience', type=int, default=10)
-    parser.add_argument('--resume_checkpoint', type=str2bool, default=None)
-    parser.add_argument('--use_class_weights', type=str2bool, default=True)
-    parser.add_argument('--pretrained_weights', type=str, default=None, help='Path to pretrained model weights')
-    parser.add_argument('--training_stage', type=str, choices=['feature_extractor', 'prototypes', 'joint', 'projection', 'classifier', 'fusion'], required=True)
-    parser.add_argument('--dimension', type=str, choices=['1D', '2D'], required=True, help='Specify whether the model is 1D or 2D')
-    parser.add_argument('--backbone', type=str, choices=[
-        'resnet1d18', 'resnet1d34', 'resnet1d50', 'resnet1d101', 'resnet1d152',
-        'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152',
-    ], required=True, help='Specify the backbone architecture')
-    parser.add_argument('--single_class_prototype_per_class', type=int, default=5)
-    parser.add_argument('--joint_prototypes_per_border', type=int, default=0) #not used in our paper
-    parser.add_argument('--sampling_rate', type=int, choices=[100, 500], required=True) #we use 100 Hz
-    parser.add_argument('--label_set', type=str, choices=['superdiagnostic', 'subdiagnostic', 'all', 'diagnostic', 'form', 'rhythm', '1', '2', '3', '4'], default='superdiagnostic')
-    parser.add_argument('--test_model', type=str2bool, default=False, help='Flag to of whether to skip training and just test the model')
-    parser.add_argument('--save_weights', type=str2bool, default=True, help='Flag to save model weights after training')
-    parser.add_argument('--custom_groups', type=str2bool, default=False, help='Flag to use custom label groupings')
-    parser.add_argument('--standardize', type=str2bool, default=False, help='Whether to standardize input ECG signals')
-    parser.add_argument('--remove_baseline', type=str2bool, default=True, help='Whether to remove baseline wander from input ECG signals (high-pass filter)')
-    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
-    parser.add_argument('--num_workers', type=int, default=0, help='Number of workers for dataloader')
-
-    parser.add_argument('--scheduler_type', type=str, choices=['ReduceLROnPlateau', 'CosineAnnealingLR', 'CyclicLR'],
-                    default='ReduceLROnPlateau', help="Type of learning rate scheduler to use")
-
-    # Fusion classifier-specific arguments
-    parser.add_argument('--fusion_weights1', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat1_new_redo1_proj1/cat1_new_redo1_proj1_projection.pth', help='Path to pretrained model weights for category 1')
-    parser.add_argument('--fusion_weights3', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat3_2D_redo1_tunejoint1_trial96_proj/cat3_2D_redo1_tunejoint1_trial96_proj_projection.pth', help='Path to pretrained model weights for category 3')
-    parser.add_argument('--fusion_weights4', type=str, default='/gpfs/data/bbj-lab/users/sethis/experiments/checkpoints/cat4_2D_redo1_tunejoint1_trial5_proj/cat4_2D_redo1_tunejoint1_trial5_proj_projection.pth', help='Path to pretrained model weights for category 4')
-    
-    parser.add_argument('--fusion_backbone1', type=str, default='resnet1d18', help='Backbone for 1D rhythm model (category 1)')
-    parser.add_argument('--fusion_backbone3', type=str, default='resnet18', help='Backbone for 2D partial morphology model (category 3)')
-    parser.add_argument('--fusion_backbone4', type=str, default='resnet18', help='Backbone for 2D global model (category 4)')
-
-    parser.add_argument('--fusion_proto_dim1', type=int, default=512, help='Prototype dimension for 1D rhythm model (category 1)')
-    parser.add_argument('--fusion_proto_dim3', type=int, default=512, help='Prototype dimension for 2D partial morphology model (category 3)')
-    parser.add_argument('--fusion_proto_dim4', type=int, default=512, help='Prototype dimension for 2D global model (category 4)')
-
-    parser.add_argument('--fusion_single_ppc1', type=int, default=5, help='Single-class prototypes per class for category 1')
-    parser.add_argument('--fusion_single_ppc3', type=int, default=18, help='Single-class prototypes per class for category 3')
-    parser.add_argument('--fusion_single_ppc4', type=int, default=7, help='Single-class prototypes per class for category 4')
-
-    parser.add_argument('--fusion_joint_ppb1', type=int, default=0, help='Joint prototypes per border for category 1')
-    parser.add_argument('--fusion_joint_ppb3', type=int, default=0, help='Joint prototypes per border for category 3')
-    parser.add_argument('--fusion_joint_ppb4', type=int, default=0, help='Joint prototypes per border for category 4')
-    args = parser.parse_args()
-
-    # Set random seed
-    print(f"Setting random seed: {args.seed}")
-    seed_everything(args.seed)
-    
-    # Determine number of classes
-    print("Loading label mappings...")
-    label_mappings = load_label_mappings(
-        custom_groups=args.custom_groups,
-        prototype_category=int(args.label_set) if args.custom_groups else None
+    from fusion import (
+        FusionProtoClassifier,
+        load_fusion_label_mappings,
+        get_fusion_dataloaders,
     )
 
-    if args.custom_groups:
-        num_classes = len(label_mappings["custom"])
-    else:
-        num_classes = len(label_mappings[args.label_set])
+    # --- Import ResNet backbones so names exist in the namespace ---
+    from backbones import (
+        resnet1d18,
+        resnet1d34,
+        resnet1d50,
+        resnet1d101,
+        resnet1d152,
+        resnet18,
+        resnet34,
+        resnet50,
+        resnet101,
+        resnet152,
+    )
 
-    if args.training_stage == "projection":
-        return_sample_ids=True
-    else: 
-        return_sample_ids=False
-    
-    # Load Data
-    if args.training_stage != 'fusion':
-        print(f"Loading data (num_workers: {args.num_workers})...")
-
-        train_loader, val_loader, test_loader, class_weights = get_dataloaders(
-            batch_size=args.batch_size, 
-            mode=args.dimension,
-            sampling_rate=args.sampling_rate, 
-            label_set=args.label_set,
-            work_num=args.num_workers,
-            return_sample_ids=return_sample_ids,
-            custom_groups=args.custom_groups, 
-            standardize=args.standardize,
-            remove_baseline=args.remove_baseline,
+    # --- Try to import extra CNN backbones (not required) ---
+    try:
+        from custom_backbones import (
+            simple_cnn,
+            deep_cnn,
+            wide_cnn,
+            cnn_gru,
+            cnn_lstm,
+            cnn_transformer,
+            inception_cnn,
         )
+        print("[INFO] Custom CNN backbones loaded successfully.")
+    except ImportError as e:
+        print(f"[INFO] Skipping custom_backbones.py ({e}). Only ResNet backbones will be used.")
 
-        if args.use_class_weights: 
-            class_wts = class_weights
-        else: 
-            class_wts=None
+    # speed tweak
+    torch.set_float32_matmul_precision("high")
 
-    # Model selection
-    print(f"Selecting model: {args.backbone} with dimension {args.dimension} for stage {args.training_stage}...")
-    if args.training_stage == "feature_extractor":
-        model = eval(args.backbone)(num_classes=num_classes, dropout=args.dropout)  # Load backbone directly
-        if args.pretrained_weights: # Load pretrained weights if specified
-            state_dict = torch.load(args.pretrained_weights, map_location=torch.device('cuda' if torch.cuda.is_available() else 'cpu'))
-            model.load_state_dict(state_dict, strict=False)
-            print(f"Loaded pretrained weights from {args.pretrained_weights}")
-    elif args.training_stage != 'fusion':
-        if args.dimension == '1D':
-            model = ProtoECGNet1D(num_classes=num_classes, single_class_prototype_per_class=args.single_class_prototype_per_class, 
-                                  joint_prototypes_per_border=args.joint_prototypes_per_border, proto_dim=args.proto_dim, 
-                                  backbone=args.backbone, prototype_activation_function=args.prototype_activation_function, 
-                                  latent_space_type=args.latent_space_type, add_on_layers_type=args.add_on_layers_type, 
-                                  class_specific=args.class_specific, last_layer_connection_weight=args.last_layer_connection_weight, 
-                                  m=args.m, dropout=args.dropout, custom_groups=args.custom_groups, label_set = args.label_set, pretrained_weights=args.pretrained_weights)
-        elif args.dimension == '2D':
-            model = ProtoECGNet2D(num_classes=num_classes, single_class_prototype_per_class=args.single_class_prototype_per_class, 
-                                  joint_prototypes_per_border=args.joint_prototypes_per_border, proto_dim=args.proto_dim, 
-                                  proto_time_len=args.proto_time_len,backbone=args.backbone, prototype_activation_function=args.prototype_activation_function, 
-                                  latent_space_type=args.latent_space_type, add_on_layers_type=args.add_on_layers_type, 
-                                  class_specific=args.class_specific, last_layer_connection_weight=args.last_layer_connection_weight, 
-                                  m=args.m, dropout=args.dropout, custom_groups=args.custom_groups, label_set = args.label_set, pretrained_weights=args.pretrained_weights)
+    # === make /opt/gpudata/summereunann/echonext_suite/scripts/metrics.py importable ===
+    _here = _Path(__file__).resolve()
+    _project_guess_1 = _here.parents[2]
+    _project_guess_2 = _here.parents[1]
+    if (_project_guess_1 / "scripts").exists():
+        _proj_root = _project_guess_1
+    else:
+        _proj_root = _project_guess_2
+    _scripts_dir = _proj_root / "scripts"
+    if str(_scripts_dir) not in _sys.path:
+        _sys.path.insert(0, str(_scripts_dir))
+    try:
+        # this is separate metrics.py (the one pasted)
+        from metrics import compute_metrics_dict as _compute_metrics_dict
+    except Exception:
+        _compute_metrics_dict = None
+
+    # ---------------------------------------------------------------
+    # metrics helper — FIXED to:
+    #   1) look in <test_dir>/<job_name>/... (what trainer does)
+    #   2) understand Label_*/Prob_* columns
+    # ---------------------------------------------------------------
+    def _run_metrics_from_csv(args):
+        if _compute_metrics_dict is None:
+            print("[metrics] metrics.py not available, skipping.")
+            return
+
+        from pathlib import Path as _P2
+        import pandas as _pd
+        import json as _json
+
+        test_dir = _P2(args.test_dir)
+        job = args.job_name
+
+        # trainer wrote: <test_dir>/<job>/<job>_test_results_v0.csv
+        job_dir = test_dir / job
+
+        candidates = []
+
+        # a) the exact path trainer wrote in logs
+        candidates.append(job_dir / f"{job}_test_results_v0.csv")
+        # b) any versioned file (sometimes PL increments version)
+        if job_dir.exists():
+            candidates.extend(sorted(job_dir.glob(f"{job}_test_results_v*.csv")))
+        # c) old flat layout, just in case
+        candidates.append(test_dir / f"{job}_test_results_v0.csv")
+
+        csv_path = None
+        for c in candidates:
+            if c.exists():
+                csv_path = c
+                break
+
+        if csv_path is None:
+            print(f"[metrics] CSV not found in {job_dir} or {test_dir}, skipping.")
+            return
+
+        print(f"[metrics] reading {csv_path}")
+        df = _pd.read_csv(csv_path)
+        cols = list(df.columns)
+
+        mode = getattr(args, "mode", "multilabel").lower()
+
+        y_true = y_prob = None
+        valid_mask = None
+
+        # -------- CASE 1: trainer-style multilabel: Label_xxx / Prob_xxx --------
+        label_like = sorted([c for c in cols if c.startswith("Label_")])
+        prob_like = sorted([c for c in cols if c.startswith("Prob_")])
+        if label_like and prob_like and len(label_like) == len(prob_like):
+            # build arrays in a consistent order
+            Y_true = df[label_like].to_numpy().astype(float)
+            Y_prob = df[prob_like].to_numpy().astype(float)
+            y_true, y_prob = Y_true, Y_prob
+            # since this is the format  trainer uses, we can just run multilabel
+            metrics_dict = _compute_metrics_dict("multilabel", y_true, y_prob, valid_mask=valid_mask)
+            out_path = job_dir / f"{job}_metrics.json"
+            out_path.write_text(_json.dumps(metrics_dict, indent=2))
+            print(f"[metrics] saved metrics to {out_path}")
+            return
+
+        # -------- CASE 2: earlier runner-style CSV names --------
+        if mode == "binary":
+            truth_candidates = ["y_true", "label", "target", "gt"]
+            prob_candidates = ["y_prob", "prob", "pred_prob", "pred", "score", "logit"]
+            for c in truth_candidates:
+                if c in df:
+                    y_true = df[c].to_numpy().astype(float)
+                    break
+            for c in prob_candidates:
+                if c in df:
+                    y_prob = df[c].to_numpy().astype(float)
+                    break
+            if y_true is None or y_prob is None:
+                # fall back to multilabel inference
+                mode = "multilabel"
+
+        if mode != "binary" and (y_true is None or y_prob is None):
+            true_like = sorted([c for c in cols if c.startswith("y_true_") or c.endswith("_true")])
+            prob_like = sorted([c for c in cols if c.startswith("y_prob_") or c.endswith("_prob")])
+            if true_like and prob_like and len(true_like) == len(prob_like):
+                y_true = df[true_like].to_numpy().astype(float)
+                y_prob = df[prob_like].to_numpy().astype(float)
+            else:
+                print("[metrics] could not infer columns, skipping.")
+                return
+
+        metrics_dict = _compute_metrics_dict(mode, y_true, y_prob, valid_mask=valid_mask)
+        # for runner-style, write next to test_dir
+        out_path = test_dir / f"{job}_metrics.json"
+        out_path.write_text(_json.dumps(metrics_dict, indent=2))
+        print(f"[metrics] saved metrics to {out_path}")
+
+    # ================================================================
+    # argument parser
+    # ================================================================
+    parser = argparse.ArgumentParser(description="Train and/or test ProtoECGNet models.")
+
+    # general
+    parser.add_argument("--job_name", type=str, default="protoecgnet_run")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", type=str, default="cuda")
+    parser.add_argument("--dimension", type=str, default="1D", choices=["1D", "2D"])
+    parser.add_argument("--mode", type=str, default="multilabel", choices=["binary", "multilabel", "multitask"])
+    parser.add_argument("--label_set", type=str, default="all")
+    parser.add_argument("--custom_groups", action="store_true", default=False)
+
+    # data / paths
+    parser.add_argument("--train_dir", type=str, default="/opt/gpudata/summereunann/echonext_suite/data/train")
+    parser.add_argument("--val_dir", type=str, default="/opt/gpudata/summereunann/echonext_suite/data/val")
+    parser.add_argument("--test_dir", type=str, default="/opt/gpudata/summereunann/echonext_suite/data/test")
+    parser.add_argument("--checkpoint_dir", type=str, default="/opt/gpudata/summereunann/echonext_suite/checkpoints")
+    parser.add_argument("--log_dir", type=str, default="/opt/gpudata/summereunann/echonext_suite/logs")
+    parser.add_argument("--processed_dir", type=str, default=None)
+
+    # training params
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--l2", type=float, default=0.0)
+    parser.add_argument("--backbone", type=str, default="simple_cnn")
+    parser.add_argument("--sampling_rate", type=int, default=500)
+
+    # prototype-related
+    parser.add_argument("--proto_dim", type=int, default=256)
+    parser.add_argument("--proto_time_len", type=int, default=3)
+    parser.add_argument("--single_class_prototype_per_class", type=int, default=10)
+
+    # loss weights
+    parser.add_argument("--l1", type=float, default=0.0)
+    parser.add_argument("--lam_clst", type=float, default=0.8)
+    parser.add_argument("--lam_sep", type=float, default=0.08)
+    parser.add_argument("--lam_spars", type=float, default=0.0)
+    parser.add_argument("--lam_div", type=float, default=0.0)
+    parser.add_argument("--lam_cnrst", type=float, default=0.0)
+
+    # lightning / trainer knobs training_functions.py expects
+    parser.add_argument("--save_top_k", type=int, default=1)
+    parser.add_argument("--patience", type=int, default=5)
+    parser.add_argument("--resume_checkpoint", action="store_true", help="resume last ckpt if present")
+    parser.add_argument("--save_weights", action="store_true", help="save model weights after projection")
+    parser.add_argument(
+        "--scheduler_type",
+        type=str,
+        default="none",
+        choices=["none", "ReduceLROnPlateau", "CosineAnnealingLR", "CyclicLR"],
+    )
+
+    # training stage
+    parser.add_argument(
+        "--training_stage",
+        type=str,
+        default="joint",
+        choices=["projection", "fusion", "joint", "prototypes", "classifier", "feature_extractor"],
+    )
+
+    # testing only
+    parser.add_argument("--test_model", action="store_true", help="If set, only run test_model().")
+
+    args = parser.parse_args()
+
+    # ------------------------------------------------------------
+    # patch a few lightning-ish attrs so we don't crash later
+    # ------------------------------------------------------------
+    if not hasattr(args, "log_every_n_steps"):
+        args.log_every_n_steps = 50
+    if not hasattr(args, "check_val_every_n_epoch"):
+        args.check_val_every_n_epoch = 1
+    if not hasattr(args, "num_sanity_val_steps"):
+        args.num_sanity_val_steps = 0
+
+    # ================================================================
+    # main logic
+    # ================================================================
+    seed_everything(args.seed)
+
+    # make training_functions.get_class_names() see the same processed dir
+    if args.processed_dir:
+        os.environ["ECHONEXT_PROCESSED_DIR"] = args.processed_dir
+
+    _processed_dir = args.processed_dir  # may be None → ecg_utils will use default
+
+    # ----------------------------------------------------------------
+    # helper to build class weights from label_map (what train_model wants)
+    # ----------------------------------------------------------------
+    def _make_class_weights(label_map):
+        y = np.asarray(label_map["train_labels"])
+        if y.ndim == 1:
+            y = y[:, None]
+        pos = y.sum(axis=0)
+        n = y.shape[0]
+        weights = (n - pos) / (pos + 1e-6)
+        return torch.from_numpy(weights.astype(np.float32))
+
+    # ----------------------------------------------------------------
+    # robust model builder
+    # ----------------------------------------------------------------
+    def _build_proto_model(args, num_classes: int):
+        if args.dimension.upper() == "1D":
+            cls = ProtoECGNet1D
         else:
-            raise ValueError(f"Unsupported model dimension: {args.dimension}")
+            cls = ProtoECGNet2D
 
+        base = dict(
+            num_classes=num_classes,
+            proto_dim=args.proto_dim,
+            single_class_prototype_per_class=args.single_class_prototype_per_class,
+        )
 
-    # Train or test model
+        candidate_kwargs = [
+            dict(base, backbone=args.backbone, mode=args.mode, proto_time_len=args.proto_time_len),
+            dict(base, backbone=args.backbone, mode=args.mode),
+            dict(base, backbone=args.backbone),
+            dict(base, mode=args.mode),
+            dict(base),
+        ]
+
+        last_err = None
+        for kw in candidate_kwargs:
+            try:
+                return cls(**kw)
+            except TypeError as e:
+                last_err = e
+                continue
+        raise last_err
+
+    # ----- test-only path ----------------------------------------------------
     if args.test_model:
+        label_map = load_label_mappings(
+            processed_dir=_processed_dir,
+            mode=args.mode,
+            label_set=args.label_set,
+            custom_groups=args.custom_groups,
+        )
+        train_loader, val_loader, test_loader = get_dataloaders(args, label_map)
+
+        model = _build_proto_model(args, num_classes=len(label_map["all"]))
+        model.to(args.device)
+
         test_model(model, test_loader, args=args)
-    elif args.training_stage == "projection":
-        trainer = train_model(model, train_loader, val_loader, args, class_wts)
-    elif args.training_stage == "fusion":
-        label_map = load_fusion_label_mappings()
+        _run_metrics_from_csv(args)
+        raise SystemExit(0)
 
-        num_classes1 = len(label_map["1"])
-        num_classes3 = len(label_map["3"])
-        num_classes4 = len(label_map["4"])
+    # ----- fusion stage ------------------------------------------------------
+    if args.training_stage == "fusion":
+        fusion_label_map = load_fusion_label_mappings(args.label_set)
+        train_loader, val_loader, test_loader = get_fusion_dataloaders(args, fusion_label_map)
 
+        model = FusionProtoClassifier(args=args, num_classes=len(fusion_label_map))
+        model.to(args.device)
 
-        print("Loading pretrained 1D and 2D models for fusion...")
-        
-        print(f"Creating category 1 model with backbone {args.fusion_backbone1}...")
-        model_1d = ProtoECGNet1D(
-            num_classes=num_classes1,
-            single_class_prototype_per_class=args.fusion_single_ppc1,
-            joint_prototypes_per_border=args.fusion_joint_ppb1,
-            proto_dim=args.fusion_proto_dim1,
-            backbone=args.fusion_backbone1,
-            prototype_activation_function=args.prototype_activation_function,
-            latent_space_type=args.latent_space_type,
-            add_on_layers_type=args.add_on_layers_type,
-            class_specific=args.class_specific,
-            last_layer_connection_weight=args.last_layer_connection_weight,
-            m=args.m,
-            dropout=args.dropout,
-            custom_groups=True,
-            label_set="1",
-            pretrained_weights=args.fusion_weights1
-        )
-
-        print(f"1D model loaded. Creating category 3 model with backbone {args.fusion_backbone3}...")
-
-        model_2d_partial = ProtoECGNet2D(
-            num_classes=num_classes3,
-            single_class_prototype_per_class=args.fusion_single_ppc3,
-            joint_prototypes_per_border=args.fusion_joint_ppb3,
-            proto_dim=args.fusion_proto_dim3,
-            proto_time_len=args.proto_time_len,
-            backbone=args.fusion_backbone3,
-            prototype_activation_function=args.prototype_activation_function,
-            latent_space_type=args.latent_space_type,
-            add_on_layers_type=args.add_on_layers_type,
-            class_specific=args.class_specific,
-            last_layer_connection_weight=args.last_layer_connection_weight,
-            m=args.m,
-            dropout=args.dropout,
-            custom_groups=True,
-            label_set="3",
-            pretrained_weights=args.fusion_weights3
-        )
-
-        print(f"2D partial model loaded. Creating category 4 model with backbone {args.fusion_backbone4}...")
-        model_2d_global = ProtoECGNet2D(
-            num_classes=num_classes4,
-            single_class_prototype_per_class=args.fusion_single_ppc4,
-            joint_prototypes_per_border=args.fusion_joint_ppb4,
-            proto_dim=args.fusion_proto_dim4,
-            proto_time_len=32,
-            backbone=args.fusion_backbone4,
-            prototype_activation_function=args.prototype_activation_function,
-            latent_space_type=args.latent_space_type,
-            add_on_layers_type=args.add_on_layers_type,
-            class_specific=args.class_specific,
-            last_layer_connection_weight=args.last_layer_connection_weight,
-            m=args.m,
-            dropout=args.dropout,
-            custom_groups=True,
-            label_set="4",
-            pretrained_weights=args.fusion_weights4
-        )
-
-        print(f"Loaded all three models for fusion {args.fusion_backbone3}...")
-        for m in [model_1d, model_2d_partial, model_2d_global]:
-                m.eval()
-                for param in m.parameters():
-                    param.requires_grad = False
-
-        model = FusionProtoClassifier(model_1d, model_2d_partial, model_2d_global, num_classes=71)
-        print(f"Fusion classifier initialized. Getting dataloaders...")
-        train_loader, val_loader, test_loader, class_weights = get_fusion_dataloaders(args, return_sample_ids=return_sample_ids)
-
-        print(f"Got dataloaders. Starting fusion classifier training...")
-        trainer = train_model(model, train_loader, val_loader, args, class_weights)
-
-        print(f"Training complete. Beginning fusion classifier testing...")
+        trainer = train_model(model, train_loader, val_loader, args, class_weights=None)
         test_model(model, test_loader, args=args, trainer=trainer)
-    else:
-        trainer = train_model(model, train_loader, val_loader, args, class_wts)
-        test_model(model, test_loader, args=args, trainer=trainer)
-    
+        _run_metrics_from_csv(args)
+        raise SystemExit(0)
+
+    # ----- all other stages --------------------------------------------------
+    label_map = load_label_mappings(
+        processed_dir=_processed_dir,
+        mode=args.mode,
+        label_set=args.label_set,
+        custom_groups=args.custom_groups,
+    )
+    train_loader, val_loader, test_loader = get_dataloaders(args, label_map)
+
+    class_weights = _make_class_weights(label_map)
+
+    model = _build_proto_model(args, num_classes=len(label_map["all"]))
+    model.to(args.device)
+
+    trainer = train_model(model, train_loader, val_loader, args, class_weights)
+    test_model(model, test_loader, args=args, trainer=trainer)
+    _run_metrics_from_csv(args)
